@@ -13,6 +13,12 @@ from app.models.framework import (
     MetricDefinition,
     MetricLineage,
 )
+from app.models.governance import (
+    AssuranceRequest,
+    EscalationEvent,
+    ImpactEvent,
+    MetricControlPolicy,
+)
 from app.models.reporting import GeneratedReport, ReportSnapshot
 from app.models.validation import ValidationException, ValidationRule
 from app.models.workflow import AISuggestion, BulkImportJob, Notification
@@ -33,6 +39,10 @@ __all__ = [
     "FrameworkVersion",
     "MetricDefinition",
     "MetricLineage",
+    "MetricControlPolicy",
+    "AssuranceRequest",
+    "ImpactEvent",
+    "EscalationEvent",
     "GeneratedReport",
     "ReportSnapshot",
     "ValidationException",

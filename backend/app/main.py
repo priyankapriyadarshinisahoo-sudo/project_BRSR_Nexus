@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import health
 from app.api.errors import register_exception_handlers
 from app.api.users import router as users_router
+from app.assurance.router import router as assurance_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.config import get_settings
@@ -20,10 +21,12 @@ from app.consolidation.router import router as consolidation_router
 from app.entities.router import router as entities_router
 from app.evidence.router import router as evidence_router
 from app.framework.router import router as framework_router
+from app.governance.router import router as governance_router
 from app.lineage.router import router as lineage_router
 from app.ai.router import router as ai_router
 from app.imports.router import router as imports_router
 from app.notifications.router import router as notifications_router
+from app.passport.router import router as passport_router
 from app.reporting.router import router as reporting_router
 from app.trends.router import router as trends_router
 from app.logging import configure_logging, request_id_var
@@ -111,6 +114,9 @@ def create_app() -> FastAPI:
     app.include_router(imports_router)
     app.include_router(ai_router)
     app.include_router(evidence_router)
+    app.include_router(passport_router)
+    app.include_router(governance_router)
+    app.include_router(assurance_router)
 
 
     register_exception_handlers(app)

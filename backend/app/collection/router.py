@@ -41,6 +41,9 @@ class ValueSave(BaseModel):
     raw_unit: str | None = None
     qualitative_value: str | None = None
     expected_last_version: int | None = None
+    methodology_version: str | None = None
+    methodology_notes: str | None = None
+    assumptions: dict | None = None
 
 
 class ValueOut(BaseModel):
@@ -59,7 +62,9 @@ class ValueOut(BaseModel):
 
 
 class ReviewAction(BaseModel):
-    action: str = Field(pattern="^(START_REVIEW|APPROVE|NEEDS_CORRECTION|REJECT)$")
+    action: str = Field(
+        pattern="^(START_REVIEW|APPROVE|SECOND_APPROVAL|NEEDS_CORRECTION|REJECT)$"
+    )
     comment: str | None = None
 
 
@@ -220,7 +225,10 @@ def save_value(
         value = service.save_value(
             db, assignment, action=body.action,
             payload={"raw_value": body.raw_value, "raw_unit": body.raw_unit,
-                     "qualitative_value": body.qualitative_value},
+                     "qualitative_value": body.qualitative_value,
+                     "methodology_version": body.methodology_version,
+                     "methodology_notes": body.methodology_notes,
+                     "assumptions": body.assumptions},
             actor=user, expected_last_version=body.expected_last_version,
             request_id=request_id_var.get(),
         )
@@ -245,6 +253,91 @@ def review_assignment(
     try:
         assignment = service.review(
             db, assignment, action=body.action, actor=user, comment=body.comment,
+            request_id=request_id_var.get(),
+        )
+        db.commit()
+    except service.CollectionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    db.refresh(assignment)
+    return _assignment_out(assignment)
+
+
+class ReopenBody(BaseModel):
+    reason: str
+
+
+class ReassignBody(BaseModel):
+    new_owner_user_id: uuid.UUID
+    reason: str
+
+
+class ReviewersBody(BaseModel):
+    reviewer_user_id: uuid.UUID | None = None
+    second_approver_user_id: uuid.UUID | None = None
+
+
+@router.post("/{assignment_id}/reopen", response_model=AssignmentOut)
+def reopen_assignment(
+    assignment_id: uuid.UUID,
+    body: ReopenBody,
+    request: Request,
+    user: AppUser = Depends(require_creator),
+    scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
+    db: Session = Depends(get_db),
+) -> AssignmentOut:
+    assignment = _load_scoped(db, assignment_id, user, scoped_ids)
+    try:
+        assignment = service.reopen(
+            db, assignment, actor=user, reason=body.reason,
+            request_id=request_id_var.get(),
+        )
+        db.commit()
+    except service.CollectionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    db.refresh(assignment)
+    return _assignment_out(assignment)
+
+
+@router.post("/{assignment_id}/reassign", response_model=AssignmentOut)
+def reassign_assignment(
+    assignment_id: uuid.UUID,
+    body: ReassignBody,
+    request: Request,
+    user: AppUser = Depends(require_creator),
+    scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
+    db: Session = Depends(get_db),
+) -> AssignmentOut:
+    assignment = _load_scoped(db, assignment_id, user, scoped_ids)
+    try:
+        assignment = service.reassign(
+            db, assignment, new_owner_id=body.new_owner_user_id, actor=user,
+            reason=body.reason, request_id=request_id_var.get(),
+        )
+        db.commit()
+    except service.CollectionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    db.refresh(assignment)
+    return _assignment_out(assignment)
+
+
+@router.post("/{assignment_id}/reviewers", response_model=AssignmentOut)
+def set_reviewers(
+    assignment_id: uuid.UUID,
+    body: ReviewersBody,
+    request: Request,
+    user: AppUser = Depends(require_creator),
+    scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
+    db: Session = Depends(get_db),
+) -> AssignmentOut:
+    assignment = _load_scoped(db, assignment_id, user, scoped_ids)
+    try:
+        assignment = service.set_reviewers(
+            db, assignment, actor=user,
+            reviewer_user_id=body.reviewer_user_id,
+            second_approver_user_id=body.second_approver_user_id,
             request_id=request_id_var.get(),
         )
         db.commit()

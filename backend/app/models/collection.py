@@ -65,6 +65,15 @@ class Assignment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     owner_user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("app_user.id", ondelete="RESTRICT"), nullable=False
     )
+    # manager orchestration: explicit reviewer / second-level approver (optional;
+    # when NULL any role-eligible reviewer may act, SoD still applies)
+    reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    second_approver_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    # risk-adaptive review bookkeeping (denormalized for the Control Passport)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    second_approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    second_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[AssignmentStatus] = mapped_column(
         Enum(AssignmentStatus, name="assignment_status", native_enum=True),
@@ -106,6 +115,10 @@ class MetricValue(UUIDPrimaryKeyMixin, Base):
     )
     formula_version: Mapped[int | None] = mapped_column(Integer)
     formula_inputs: Mapped[dict | None] = mapped_column(JSONB)
+    # governed methodology snapshot (feature 11): historical rows are immutable
+    methodology_version: Mapped[str | None] = mapped_column(String(50))
+    methodology_notes: Mapped[str | None] = mapped_column(Text)
+    assumptions: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[MetricValueStatus] = mapped_column(
         Enum(MetricValueStatus, name="metric_value_status", native_enum=True),
         nullable=False,

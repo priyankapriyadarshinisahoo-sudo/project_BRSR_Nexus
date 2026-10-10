@@ -21,6 +21,9 @@ class Evidence(UUIDPrimaryKeyMixin, Base):
     object_key: Mapped[str] = mapped_column(String(500), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    # evidence-policy category (feature 10): source_data | methodology |
+    # emission_factor | supporting_doc | reviewer_confirmation | None (legacy)
+    category: Mapped[str | None] = mapped_column(String(50))
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     uploaded_by: Mapped[uuid.UUID] = mapped_column(

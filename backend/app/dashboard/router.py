@@ -8,7 +8,7 @@ explicit note.
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -323,4 +323,236 @@ def summary(
         scope_split=scope_split,
         entity_comparison=entity_comparison,
         notes=notes,
+    )
+
+
+# --------------------------------------------------------------------------
+# ESG Reporting Control Tower (feature 8) — governance indicators computed
+# from real system data only. The existing dashboard summary is untouched.
+# --------------------------------------------------------------------------
+
+class ControlTower(BaseModel):
+    period_id: uuid.UUID
+    period_label: str
+    period_locked: bool
+    critical_metrics: dict          # total / ready / blocked / pending_review
+    high_risk: dict                 # open blocking exceptions, missing evidence,
+                                    # stale metrics, overdue, reviewer backlog,
+                                    # open assurance requests
+    funnel: dict[str, int]          # workflow stage counts
+    bottleneck: dict                # current stage blocking the cycle
+    deadlines: dict                 # next critical deadline, overdue count
+    core_readiness: dict
+
+
+@router.get("/control-tower", response_model=ControlTower)
+def control_tower(
+    period_id: uuid.UUID = Query(default=None),
+    user: AppUser = Depends(get_current_user),
+    scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
+    db: Session = Depends(get_db),
+) -> ControlTower:
+    from datetime import date as date_cls
+
+    from app.models import AssuranceRequest, ConsolidationTrace
+    from app.models.enums import AssuranceRequestStatus, ValidationExceptionStatus
+
+    period = db.get(ReportingPeriod, period_id) if period_id else _period_by_label(db, "FY2025-26")
+    if period is None:
+        period = db.scalar(select(ReportingPeriod).order_by(ReportingPeriod.start_date.desc()))
+    if period is None:
+        raise HTTPException(status_code=404, detail="No reporting periods exist")
+    all_visible = user.role in (UserRole.ADMIN, UserRole.ESG_MANAGER)
+
+    stmt = select(Assignment).where(Assignment.period_id == period.id)
+    if not all_visible:
+        stmt = stmt.where(Assignment.entity_id.in_(scoped_ids))
+    assignments = list(db.scalars(stmt).all())
+    assignment_by_id = {a.id: a for a in assignments}
+
+    funnel: dict[str, int] = {}
+    for a in assignments:
+        funnel[a.status.value] = funnel.get(a.status.value, 0) + 1
+
+    # ---- risk tiers per metric (control policies) ----
+    from app.governance.policies import get_policy
+
+    metric_codes = {a.metric_code: db.scalar(
+        select(MetricDefinition).where(
+            MetricDefinition.framework_version_id == a.framework_version_id,
+            MetricDefinition.metric_code == a.metric_code,
+        )) for a in assignments}
+    critical_assignments = []
+    high_assignments = []
+    for a in assignments:
+        policy = get_policy(db, a.framework_version_id, a.metric_code)
+        if policy.risk_tier.value == "CRITICAL":
+            critical_assignments.append(a)
+        elif policy.risk_tier.value == "HIGH":
+            high_assignments.append(a)
+
+    def _tier_counts(rows: list[Assignment]) -> dict:
+        ready = blocked = pending = 0
+        for a in rows:
+            if a.status in (AssignmentStatus.APPROVED, AssignmentStatus.LOCKED):
+                ready += 1
+            elif a.status in (AssignmentStatus.SUBMITTED, AssignmentStatus.UNDER_REVIEW,
+                              AssignmentStatus.PENDING_SECOND_APPROVAL):
+                pending += 1
+            else:
+                blocked += 1
+        return {"total": len(rows), "ready": ready, "blocked": blocked, "pending_review": pending}
+
+    critical_metrics = _tier_counts(critical_assignments)
+
+    # ---- open high-risk issues ----
+    ex_stmt = select(ValidationException).where(
+        ValidationException.period_id == period.id,
+        ValidationException.status != ValidationExceptionStatus.RESOLVED,
+    )
+    if not all_visible:
+        ex_stmt = ex_stmt.where(ValidationException.entity_id.in_(scoped_ids))
+    open_exceptions = list(db.scalars(ex_stmt).all())
+    open_blocking = sum(1 for e in open_exceptions if e.severity.value == "BLOCKING")
+
+    missing_evidence = 0
+    from app.models import Evidence
+
+    for a in critical_assignments + high_assignments:
+        if a.status in (AssignmentStatus.APPROVED, AssignmentStatus.LOCKED):
+            continue
+        policy = get_policy(db, a.framework_version_id, a.metric_code)
+        if not policy.required_evidence:
+            continue
+        value = db.scalar(
+            select(MetricValue).where(MetricValue.assignment_id == a.id)
+            .order_by(MetricValue.version.desc()).limit(1)
+        )
+        if value is None:
+            missing_evidence += len(policy.required_evidence)
+            continue
+        cats = {
+            c for c in db.scalars(
+                select(Evidence.category).where(
+                    Evidence.metric_value_id == value.id, Evidence.is_deleted.is_(False)
+                )
+            ).all()
+            if c
+        }
+        missing_evidence += sum(1 for c in policy.required_evidence if c not in cats)
+
+    stale_traces = len(list(db.scalars(
+        select(ConsolidationTrace.id).where(
+            ConsolidationTrace.period_id == period.id,
+            ConsolidationTrace.is_stale.is_(True),
+        )
+    ).all()))
+
+    today = date_cls.today()
+    overdue_assignments = [
+        a for a in assignments
+        if a.due_date and a.due_date < today
+        and a.status not in (AssignmentStatus.APPROVED, AssignmentStatus.LOCKED)
+    ]
+
+    reviewer_backlog = sum(
+        funnel.get(s, 0) for s in ("SUBMITTED", "UNDER_REVIEW", "PENDING_SECOND_APPROVAL")
+    )
+
+    ar_stmt = select(AssuranceRequest).where(
+        AssuranceRequest.period_id == period.id,
+        AssuranceRequest.status.notin_(
+            (AssuranceRequestStatus.RESOLVED, AssuranceRequestStatus.REJECTED)
+        ),
+    )
+    if not all_visible:
+        ar_stmt = ar_stmt.where(AssuranceRequest.entity_id.in_(scoped_ids))
+    open_assurance = len(list(db.scalars(ar_stmt).all()))
+
+    high_risk = {
+        "open_blocking_exceptions": open_blocking,
+        "missing_evidence": missing_evidence,
+        "stale_metrics": stale_traces,
+        "overdue_owners": len(overdue_assignments),
+        "reviewer_backlog": reviewer_backlog,
+        "open_assurance_requests": open_assurance,
+    }
+
+    # ---- bottleneck detection: the stage with the oldest waiting work ----
+    bottleneck = {"stage": None, "count": 0, "detail": None}
+    stage_hints = [
+        ("NOT_STARTED", "Assignment queue", "Owners have not started data entry"),
+        ("IN_PROGRESS", "Data entry", "Owners are still drafting values"),
+        ("SUBMITTED", "Reviewer queue", "Reviewers have not picked up submissions"),
+        ("UNDER_REVIEW", "Review in progress", "Reviews are ongoing"),
+        ("PENDING_SECOND_APPROVAL", "Second-level approval", "Awaiting second approvers"),
+    ]
+    for stage_key, label, detail in stage_hints:
+        count = funnel.get(stage_key, 0)
+        if count > bottleneck["count"]:
+            bottleneck = {"stage": label, "count": count, "detail": detail}
+
+    next_deadline = None
+    upcoming = sorted(
+        (a.due_date for a in assignments
+         if a.due_date and a.due_date >= today
+         and a.status not in (AssignmentStatus.APPROVED, AssignmentStatus.LOCKED)),
+    )
+    if upcoming:
+        next_deadline = str(upcoming[0])
+
+    # BRSR Core readiness (same definition as the summary endpoint)
+    core_metrics = list(
+        db.scalars(
+            select(MetricDefinition).where(
+                MetricDefinition.framework_version_id == period.framework_version_id,
+                MetricDefinition.brsr_core.is_(True),
+            )
+        ).all()
+    )
+    approved_map = {a.metric_code: a for a in assignments
+                    if a.status in (AssignmentStatus.APPROVED, AssignmentStatus.LOCKED)}
+    core_approved = sum(1 for m in core_metrics if m.metric_code in approved_map)
+    core_ready = (
+        len(core_metrics) > 0
+        and core_approved == len(core_metrics)
+        and open_blocking == 0
+        and stale_traces == 0
+    )
+    core_readiness = {
+        "total": len(core_metrics),
+        "approved": core_approved,
+        "ready": core_ready,
+        "label": "READY" if core_ready and period.locked else (
+            "IN PROGRESS" if core_ready or not period.locked else "NOT READY"
+        ),
+        "blockers": {
+            "missing_approval": len(core_metrics) - core_approved,
+            "blocking_exceptions": open_blocking,
+            "stale_traces": stale_traces,
+        },
+    }
+
+    deadlines = {
+        "next_critical_deadline": next_deadline,
+        "overdue_count": len(overdue_assignments),
+        "overdue": [
+            {"assignment_id": str(a.id), "metric_code": a.metric_code,
+             "entity_id": str(a.entity_id), "due_date": str(a.due_date),
+             "status": a.status.value}
+            for a in overdue_assignments[:6]
+        ],
+    }
+    for d in deadlines["overdue"]:
+        entity = db.get(Entity, uuid.UUID(d["entity_id"]))
+        d["entity_name"] = entity.name if entity else "?"
+
+    return ControlTower(
+        period_id=period.id, period_label=period.label, period_locked=period.locked,
+        critical_metrics=critical_metrics,
+        high_risk=high_risk,
+        funnel=funnel,
+        bottleneck=bottleneck,
+        deadlines=deadlines,
+        core_readiness=core_readiness,
     )
