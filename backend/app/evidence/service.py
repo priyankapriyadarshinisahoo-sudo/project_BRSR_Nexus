@@ -61,6 +61,7 @@ def upload_evidence(
     mime_type: str,
     content: bytes,
     actor: AppUser,
+    category: str | None = None,
     request_id: str | None = None,
 ) -> tuple[Evidence, Evidence | None]:
     """Store the file in object storage and its metadata in PostgreSQL (same commit as
@@ -112,6 +113,7 @@ def upload_evidence(
         size_bytes=len(content),
         sha256_hash=sha256,
         uploaded_by=actor.id,
+        category=category,
     )
     db.add(evidence)
     db.flush()

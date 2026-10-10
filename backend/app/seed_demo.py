@@ -106,10 +106,23 @@ REVENUE_FACTOR: dict[str, float] = {
     "Plant Zeta": 2.2,
 }
 
+# Governance demo scenario (master prompt §23): Plant Beta Scope 1 is the
+# CRITICAL, fully-controlled work item. Diesel consumption is scaled so the
+# calculated Scope 1 is 42,381 tCO2e (FY2025-26); submitting a corrected
+# diesel figure of 16,089,552.24 L during the demo recomputes Scope 1 to
+# 43,120 tCO2e and triggers the ripple engine. FY2024-25 keeps the YoY
+# delta believable (~+4%).
+BETA_DIESEL_LITRES = {
+    "FY2024-25": 15192163.0,
+    "FY2025-26": 15813805.97,
+}
+
 
 def _plant_value(code: str, plant: str, fy25: bool) -> float:
     base = DEMO_METRICS[code]
     value = base[2] if fy25 else base[1]
+    if code == "C-P6-DIESEL-LITRES" and plant == "Plant Beta":
+        return BETA_DIESEL_LITRES["FY2025-26" if fy25 else "FY2024-25"]
     factor = PLANT_FACTOR.get(plant, 1.0)
     if code == "A-REVENUE":
         factor = REVENUE_FACTOR.get(plant, factor)
@@ -297,8 +310,55 @@ def seed_collection(db: Session, entities: dict[str, Entity], esg_manager: AppUs
 
     _seed_derived_metrics(db, entities, periods, owners, esg_manager)
 
+    _seed_assurance_request(db, entities, periods)
+
     db.flush()
     logger.info("collection demo data seeded")
+
+
+def _seed_assurance_request(db: Session, entities, periods) -> None:
+    """Governance demo (master prompt §22): one OPEN assurance request from
+    the assessor on the CRITICAL Scope 1 metric, waiting for the owner."""
+    from datetime import date, timedelta
+
+    from sqlalchemy import select as _select
+
+    from app.audit.service import record as audit_record
+    from app.models import AppUser, AssuranceRequest
+    from app.models.enums import AssuranceRequestStatus, AssuranceRequestType, AuditAction
+
+    exists = db.scalar(_select(AssuranceRequest).limit(1))
+    if exists is not None:
+        return
+    assessor = db.scalar(_select(AppUser).where(AppUser.email == "assessor@example.local"))
+    owner_beta = db.scalar(_select(AppUser).where(AppUser.email == "owner-beta@example.local"))
+    beta = entities.get("Plant Beta")
+    period = periods.get("FY2025-26")
+    if assessor is None or owner_beta is None or beta is None or period is None:
+        return
+    req = AssuranceRequest(
+        request_type=AssuranceRequestType.EVIDENCE,
+        status=AssuranceRequestStatus.ASSIGNED,
+        period_id=period.id, entity_id=beta.id,
+        metric_code="C-P6-SCOPE1-TCO2E",
+        requested_by=assessor.id, assignee_id=owner_beta.id,
+        reason=(
+            "Provide the supporting evidence package for the FY2025-26 Scope 1 "
+            "recalculation: fuel purchase records, calculation methodology and "
+            "the emission factor source applied."
+        ),
+        due_date=date.today() + timedelta(days=14),
+        comments=[],
+    )
+    db.add(req)
+    db.flush()
+    audit_record(
+        db, action=AuditAction.CREATED, object_type="assurance_request",
+        object_id=req.id, actor_id=assessor.id, actor_label=assessor.email,
+        entity_id=beta.id, metric_code="C-P6-SCOPE1-TCO2E",
+        new_value={"type": "EVIDENCE", "reason": req.reason[:160]},
+    )
+    logger.info("seeded demo assurance request for Plant Beta Scope 1")
 
 
 DERIVED_METRICS = ("C-P6-TOTAL-ENERGY", "C-P6-SCOPE1-TCO2E", "C-P6-TOTAL-GHG")
@@ -316,8 +376,10 @@ def _formula_id(db: Session, framework_version_id, code: str):
 
 def _seed_derived_metrics(db: Session, entities, periods, owners, esg_manager) -> None:
     """FY2024-25: computed historical values (locked, with full formula
-    lineage). FY2025-26: assignment shells left empty for the calculation
-    engine to fill during the demo."""
+    lineage). FY2025-26: Plant Beta carries the governed demo scenario —
+    its derived metrics are APPROVED with full formula lineage (Scope 1 =
+    42,381 tCO2e, CRITICAL control path); other plants keep assignment
+    shells empty for the calculation engine to fill during the demo."""
     from app.models import FormulaDefinition
 
     for plant_name in FY25_STATUS:
@@ -328,7 +390,7 @@ def _seed_derived_metrics(db: Session, entities, periods, owners, esg_manager) -
         for fy_label, locked in (("FY2024-25", True), ("FY2025-26", False)):
             period = periods[fy_label]
             fv_id = period.framework_version_id
-            if not locked:
+            if not locked and plant_name != "Plant Beta":
                 for code in DERIVED_METRICS:
                     _seed_assignment_value(
                         db, metric_code=code, entity=plant, period=period, owner=owner,
@@ -337,10 +399,11 @@ def _seed_derived_metrics(db: Session, entities, periods, owners, esg_manager) -
                     )
                 continue
 
-            renewable = _plant_value("C-P6-GRID-RENEWABLE-MWH", plant_name, fy25=False)
-            nonrenewable = _plant_value("C-P6-GRID-NONRENEWABLE-MWH", plant_name, fy25=False)
-            diesel = _plant_value("C-P6-DIESEL-LITRES", plant_name, fy25=False)
-            scope2 = _plant_value("C-P6-SCOPE2-TCO2E", plant_name, fy25=False)
+            fy25 = not locked
+            renewable = _plant_value("C-P6-GRID-RENEWABLE-MWH", plant_name, fy25=fy25)
+            nonrenewable = _plant_value("C-P6-GRID-NONRENEWABLE-MWH", plant_name, fy25=fy25)
+            diesel = _plant_value("C-P6-DIESEL-LITRES", plant_name, fy25=fy25)
+            scope2 = _plant_value("C-P6-SCOPE2-TCO2E", plant_name, fy25=fy25)
             total_energy = renewable + nonrenewable
             scope1 = round(diesel * 2.68 / 1000, 8)
             total_ghg = round(scope1 + scope2, 8)
@@ -370,20 +433,22 @@ def _seed_derived_metrics(db: Session, entities, periods, owners, esg_manager) -
                 )
                 if exists is not None:
                     continue
+                status_a = AssignmentStatus.LOCKED if locked else AssignmentStatus.APPROVED
                 assignment = Assignment(
                     metric_code=code, framework_version_id=fv_id, entity_id=plant.id,
                     period_id=period.id, owner_user_id=owner.id, due_date=period.end_date,
-                    status=AssignmentStatus.LOCKED, created_by=esg_manager.id,
+                    status=status_a, created_by=esg_manager.id,
                 )
                 db.add(assignment)
                 db.flush()
+                value_status = MetricValueStatus.LOCKED if locked else MetricValueStatus.APPROVED
                 mv = MetricValue(
                     assignment_id=assignment.id, version=1,
                     raw_value=Decimal(str(val)), raw_unit=unit,
                     normalized_value=Decimal(str(val)), normalized_unit=unit,
                     is_calculated=True, formula_id=_formula_id(db, fv_id, formula_code),
                     formula_version=1, formula_inputs=inputs,
-                    status=MetricValueStatus.LOCKED, created_by=owner.id,
+                    status=value_status, created_by=owner.id,
                     submitted_by=owner.id, submitted_at=period.end_date,
                 )
                 db.add(mv)

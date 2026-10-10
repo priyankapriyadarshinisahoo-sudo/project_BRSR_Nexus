@@ -387,6 +387,11 @@ def persist_findings(
     for e in existing:
         if e.rule_id in matched_rule_ids or e.status == ValidationExceptionStatus.EXPLAINED:
             continue
+        # governance sentinel: re-verification exceptions are only resolvable
+        # through the remediation workflow, never by a re-run that simply
+        # does not re-evaluate the impact policy
+        if e.rule_code == "GOV-REVERIFICATION":
+            continue
         e.status = ValidationExceptionStatus.RESOLVED
         e.resolved_by = actor_id
         from datetime import UTC, datetime

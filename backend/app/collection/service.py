@@ -415,6 +415,16 @@ def review(
     if action == "START_REVIEW":
         if current != AssignmentStatus.SUBMITTED:
             raise CollectionError(f"Cannot start review from status {current.value}")
+        # evidence gate (feature 10): the control package required by the
+        # metric's policy must be complete BEFORE review opens
+        reasons = blocking_reasons(db, assignment, value, "approve")
+        policy_gates = [r for r in reasons if r["code"] in ("MISSING_EVIDENCE", "MISSING_METHODOLOGY")]
+        if policy_gates:
+            raise CollectionError(
+                "Review blocked by control policy: "
+                + "; ".join(f"{r['code']}: {r['detail']}" for r in policy_gates),
+                422,
+            )
         # review-stage validation sweep: cross-field, cross-section, YoY,
         # duplicate, evidence completeness, logical consistency
         from app.validation import engine as validation_engine

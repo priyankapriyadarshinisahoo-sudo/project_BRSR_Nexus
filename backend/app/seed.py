@@ -354,6 +354,76 @@ def _seed_periods(db: Session, current: FrameworkVersion, previous: FrameworkVer
     db.flush()
 
 
+def _seed_policies(db: Session, current_fv: FrameworkVersion, manager: AppUser) -> None:
+    """Deterministic control policies for the current framework version
+    (feature 1/10). Rows only for metrics whose policy differs from the
+    STANDARD default; absent rows resolve to defaults at runtime."""
+    from app.models import MetricControlPolicy
+    from app.models.enums import MetricRiskTier
+
+    specs = [
+        {
+            "metric_code": "C-P6-SCOPE1-TCO2E",
+            "risk_tier": MetricRiskTier.CRITICAL,
+            "risk_basis": "BRSR Core GHG disclosure; externally assured sample metric",
+            "required_evidence": ["source_data", "methodology", "emission_factor", "supporting_doc"],
+            "methodology_required": True,
+            "requires_second_approval": True,
+            "sla_days": 10,
+            "escalation_policy": ["OWNER", "REVIEWER", "ESG_MANAGER"],
+        },
+        {
+            "metric_code": "C-P6-TOTAL-GHG",
+            "risk_tier": MetricRiskTier.CRITICAL,
+            "risk_basis": "BRSR Core headline GHG figure; aggregates Scope 1 + Scope 2",
+            "required_evidence": ["methodology", "supporting_doc"],
+            "methodology_required": True,
+            "requires_second_approval": True,
+            "sla_days": 10,
+            "escalation_policy": ["OWNER", "REVIEWER", "ESG_MANAGER"],
+        },
+        {
+            "metric_code": "C-P6-GHG-INTENSITY",
+            "risk_tier": MetricRiskTier.CRITICAL,
+            "risk_basis": "BRSR Core intensity KPI derived from headline GHG",
+            "required_evidence": ["methodology"],
+            "methodology_required": True,
+            "requires_second_approval": True,
+            "sla_days": 10,
+            "escalation_policy": ["OWNER", "ESG_MANAGER"],
+        },
+        {
+            "metric_code": "C-P6-TOTAL-ENERGY",
+            "risk_tier": MetricRiskTier.HIGH,
+            "risk_basis": "BRSR Core energy disclosure feeding intensity ratios",
+            "required_evidence": ["source_data"],
+            "sla_days": 14,
+            "escalation_policy": ["OWNER", "ESG_MANAGER"],
+        },
+        {
+            "metric_code": "C-P6-SCOPE2-TCO2E",
+            "risk_tier": MetricRiskTier.HIGH,
+            "risk_basis": "BRSR Core Scope 2 disclosure",
+            "required_evidence": ["source_data", "methodology"],
+            "sla_days": 14,
+            "escalation_policy": ["OWNER", "ESG_MANAGER"],
+        },
+    ]
+    for spec in specs:
+        exists = db.scalar(
+            select(MetricControlPolicy).where(
+                MetricControlPolicy.framework_version_id == current_fv.id,
+                MetricControlPolicy.metric_code == spec["metric_code"],
+            )
+        )
+        if exists is None:
+            db.add(MetricControlPolicy(
+                framework_version_id=current_fv.id, updated_by=manager.id, **spec
+            ))
+    db.flush()
+    logger.info("seeded %d metric control policies", len(specs))
+
+
 def seed(db: Session) -> None:
     entities: dict[str, Entity] = {}
     for spec in ENTITIES:
@@ -408,6 +478,11 @@ def seed(db: Session) -> None:
 
     manager = db.scalar(select(AppUser).where(AppUser.email == "manager@example.local"))
     reviewer = db.scalar(select(AppUser).where(AppUser.email == "reviewer@example.local"))
+
+    _seed_policies(db, current_fv, manager)
+
+    from app.seed_demo import seed_collection
+
     seed_collection(db, entities, manager, reviewer)
 
     db.commit()

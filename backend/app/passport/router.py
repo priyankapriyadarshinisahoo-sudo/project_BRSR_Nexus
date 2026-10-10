@@ -129,7 +129,7 @@ def control_passport(
             "methodology_notes": latest.methodology_notes,
             "assumptions": latest.assumptions,
             "history": [
-                {"version": v.version, "raw_value": float(v.raw_value) if v.raw_value is not None else None,
+                {"id": str(v.id), "version": v.version, "raw_value": float(v.raw_value) if v.raw_value is not None else None,
                  "status": v.status.value, "is_calculated": v.is_calculated}
                 for v in values
             ],

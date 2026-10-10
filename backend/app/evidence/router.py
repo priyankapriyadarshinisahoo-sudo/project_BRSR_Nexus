@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/v1/evidence", tags=["evidence"])
 class EvidenceOut(BaseModel):
     id: uuid.UUID
     metric_value_id: uuid.UUID
+    category: str | None = None
     original_filename: str
     mime_type: str
     size_bytes: int
@@ -30,7 +31,7 @@ class EvidenceOut(BaseModel):
 
 def _out(e: Evidence) -> EvidenceOut:
     return EvidenceOut(
-        id=e.id, metric_value_id=e.metric_value_id,
+        id=e.id, metric_value_id=e.metric_value_id, category=e.category,
         original_filename=e.original_filename, mime_type=e.mime_type,
         size_bytes=e.size_bytes, sha256_hash=e.sha256_hash,
         uploaded_by=e.uploaded_by, uploaded_at=e.uploaded_at, is_deleted=e.is_deleted,
@@ -64,6 +65,7 @@ async def upload_evidence(
     request: Request,
     file: UploadFile,
     metric_value_id: uuid.UUID,
+    category: str | None = None,
     user: AppUser = Depends(get_current_user),
     scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
     db: Session = Depends(get_db),
@@ -82,7 +84,8 @@ async def upload_evidence(
             db, metric_value_id=metric_value_id,
             filename=file.filename or "evidence.bin",
             mime_type=file.content_type or "application/octet-stream",
-            content=content, actor=user, request_id=request_id_var.get(),
+            content=content, actor=user, category=category,
+            request_id=request_id_var.get(),
         )
         db.commit()
     except service.EvidenceError as exc:
