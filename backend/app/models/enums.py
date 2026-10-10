@@ -50,6 +50,7 @@ class AssignmentStatus(str, enum.Enum):
     IN_PROGRESS = "IN_PROGRESS"
     SUBMITTED = "SUBMITTED"
     UNDER_REVIEW = "UNDER_REVIEW"
+    PENDING_SECOND_APPROVAL = "PENDING_SECOND_APPROVAL"
     APPROVED = "APPROVED"
     LOCKED = "LOCKED"
     NEEDS_CORRECTION = "NEEDS_CORRECTION"
@@ -78,8 +79,48 @@ class ValidationRuleClass(str, enum.Enum):
 
 class ValidationExceptionStatus(str, enum.Enum):
     OPEN = "OPEN"
+    INVESTIGATING = "INVESTIGATING"
     EXPLAINED = "EXPLAINED"
     RESOLVED = "RESOLVED"
+
+
+class MetricRiskTier(str, enum.Enum):
+    """Control-path tier — NOT the validation exception severity."""
+    STANDARD = "STANDARD"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class AssuranceRequestType(str, enum.Enum):
+    EVIDENCE = "EVIDENCE"
+    CLARIFICATION = "CLARIFICATION"
+    CORRECTION = "CORRECTION"
+
+
+class AssuranceRequestStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    ASSIGNED = "ASSIGNED"
+    IN_PROGRESS = "IN_PROGRESS"
+    RESPONDED = "RESPONDED"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    RESOLVED = "RESOLVED"
+    REJECTED = "REJECTED"
+
+
+class ImpactItemStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    RECOMPUTED = "RECOMPUTED"
+    REVERIFIED = "REVERIFIED"
+
+
+class RemediationActionType(str, enum.Enum):
+    ASSIGNED = "ASSIGNED"
+    INVESTIGATION_STARTED = "INVESTIGATION_STARTED"
+    EXPLAINED = "EXPLAINED"
+    RESOLVED = "RESOLVED"
+    REJECTED = "REJECTED"
+    COMMENT = "COMMENT"
+    ESCALATED = "ESCALATED"
 
 
 class AuditAction(str, enum.Enum):
@@ -93,6 +134,10 @@ class AuditAction(str, enum.Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     LOCKED = "LOCKED"
+    REOPENED = "REOPENED"
+    SECOND_APPROVAL_GRANTED = "SECOND_APPROVAL_GRANTED"
+    REASSIGNED = "REASSIGNED"
+    ESCALATED = "ESCALATED"
 
 
 class JobStatus(str, enum.Enum):
@@ -111,6 +156,9 @@ class NotificationType(str, enum.Enum):
     VALIDATION_EXCEPTION = "VALIDATION_EXCEPTION"
     AI_SUGGESTION_READY = "AI_SUGGESTION_READY"
     PERIOD_LOCKED = "PERIOD_LOCKED"
+    IMPACT_DETECTED = "IMPACT_DETECTED"
+    ESCALATION = "ESCALATION"
+    ASSURANCE_REQUEST = "ASSURANCE_REQUEST"
 
 
 class AISuggestionStatus(str, enum.Enum):

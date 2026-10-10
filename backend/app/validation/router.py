@@ -53,10 +53,27 @@ class ExceptionOut(BaseModel):
     explained_by: uuid.UUID | None
     resolved_at: object | None
     created_at: object
+    # remediation workflow (feature 8)
+    category: str | None = None
+    assigned_to: uuid.UUID | None = None
+    action_required: str | None = None
+    due_date: object | None = None
+    escalation_level: int = 0
+    comments: list = []
 
 
 class ExplainBody(BaseModel):
     explanation: str = Field(min_length=5)
+
+
+class RemediationActionBody(BaseModel):
+    action: str = Field(
+        pattern="^(ASSIGN|START|EXPLAIN|RESOLVE|REJECT|COMMENT|ESCALATE)$"
+    )
+    assignee_id: uuid.UUID | None = None
+    due_date: str | None = None
+    action_required: str | None = None
+    comment: str | None = None
 
 
 def _out(e: ValidationException) -> ExceptionOut:
@@ -67,6 +84,9 @@ def _out(e: ValidationException) -> ExceptionOut:
         observed_value=float(e.observed_value) if e.observed_value is not None else None,
         status=e.status, explanation=e.explanation, explained_by=e.explained_by,
         resolved_at=e.resolved_at, created_at=e.created_at,
+        category=e.category, assigned_to=e.assigned_to,
+        action_required=e.action_required, due_date=e.due_date,
+        escalation_level=e.escalation_level, comments=e.comments or [],
     )
 
 
@@ -192,6 +212,132 @@ def explain_exception(
         object_id=exception.id, actor_id=user.id, actor_label=user.email,
         entity_id=exception.entity_id, metric_code=exception.metric_code,
         new_value={"explanation": body.explanation}, request_id=request_id_var.get(),
+    )
+    db.commit()
+    db.refresh(exception)
+    return _out(exception)
+
+
+@router.get("/exceptions/{exception_id}/remediation", response_model=ExceptionOut)
+def get_remediation(
+    exception_id: uuid.UUID,
+    user: AppUser = Depends(get_current_user),
+    scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
+    db: Session = Depends(get_db),
+) -> ExceptionOut:
+    return _out(_scoped_exception(db, exception_id, user, scoped_ids))
+
+
+@router.post("/exceptions/{exception_id}/actions", response_model=ExceptionOut)
+def remediation_action(
+    exception_id: uuid.UUID,
+    body: RemediationActionBody,
+    request: Request,
+    user: AppUser = Depends(get_current_user),
+    scoped_ids: set[uuid.UUID] = Depends(get_scoped_entity_ids),
+    db: Session = Depends(get_db),
+) -> ExceptionOut:
+    """Structured corrective-action workflow over the existing exception:
+    ASSIGN → START (INVESTIGATING) → EXPLAIN → RESOLVE/REJECT, plus COMMENT
+    and ESCALATE. All transitions are audited."""
+    from datetime import date as date_type
+    from datetime import datetime as dt
+
+    exception = _scoped_exception(db, exception_id, user, scoped_ids)
+    is_managerish = user.role in (UserRole.REVIEWER, UserRole.ESG_MANAGER, UserRole.ADMIN)
+    is_owner = False
+    if user.role == UserRole.DATA_OWNER:
+        assignment = db.get(Assignment, exception.assignment_id) if exception.assignment_id else None
+        is_owner = assignment is not None and assignment.owner_user_id == user.id
+
+    action = body.action
+    now = dt.now(UTC)
+    comment_entry = {
+        "actor": user.email, "action": action,
+        "comment": (body.comment or "").strip() or None, "at": now.isoformat(),
+    }
+
+    if action == "ASSIGN":
+        if not is_managerish:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only reviewers/managers may assign remediation")
+        if body.assignee_id is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="assignee_id is required")
+        assignee = db.get(AppUser, body.assignee_id)
+        if assignee is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignee not found")
+        exception.assigned_to = body.assignee_id
+        if body.due_date:
+            try:
+                exception.due_date = dt.combine(
+                    date_type.fromisoformat(body.due_date), dt.min.time()
+                )
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    detail="due_date must be YYYY-MM-DD")
+        if body.action_required:
+            exception.action_required = body.action_required
+    elif action == "START":
+        if not (is_owner or is_managerish):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only the assigned owner or a reviewer may start")
+        if exception.status == ValidationExceptionStatus.RESOLVED:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="Exception already resolved")
+        exception.status = ValidationExceptionStatus.INVESTIGATING
+    elif action == "EXPLAIN":
+        if exception.status == ValidationExceptionStatus.RESOLVED:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="Exception already resolved")
+        if not (is_owner or is_managerish):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Your role cannot explain this exception")
+        if not body.comment or len(body.comment.strip()) < 5:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="An explanation of at least 5 characters is required")
+        exception.explanation = body.comment
+        exception.explained_by = user.id
+        exception.explained_at = exception.explained_at or now
+        exception.status = ValidationExceptionStatus.EXPLAINED
+    elif action == "RESOLVE":
+        if not is_managerish:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only reviewers/managers may resolve remediation")
+        exception.status = ValidationExceptionStatus.RESOLVED
+        exception.resolved_by = user.id
+        exception.resolved_at = now
+    elif action == "REJECT":
+        if not is_managerish:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only reviewers/managers may reject an explanation")
+        if not body.comment or not body.comment.strip():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="A rejection comment is required")
+        exception.status = ValidationExceptionStatus.OPEN
+        exception.explanation = None
+    elif action in ("COMMENT", "ESCALATE"):
+        if not (body.comment or "").strip() and action == "COMMENT":
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="A comment is required")
+        if action == "ESCALATE":
+            if not is_managerish:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                    detail="Only reviewers/managers may escalate")
+            exception.escalation_level += 1
+    else:  # pragma: no cover - pattern validated
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Unknown action")
+
+    exception.comments = list(exception.comments or []) + [comment_entry]
+    db.flush()
+    record(
+        db, action=AuditAction.UPDATED, object_type="validation_exception",
+        object_id=exception.id, actor_id=user.id, actor_label=user.email,
+        entity_id=exception.entity_id, metric_code=exception.metric_code,
+        new_value={"action": action, "status": exception.status.value,
+                   "escalation_level": exception.escalation_level},
+        reason=body.comment, request_id=request_id_var.get(),
     )
     db.commit()
     db.refresh(exception)

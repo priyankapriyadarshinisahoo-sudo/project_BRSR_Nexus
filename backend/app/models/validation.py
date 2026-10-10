@@ -87,6 +87,13 @@ class ValidationException(UUIDPrimaryKeyMixin, Base):
         ForeignKey("metric_value.id", ondelete="CASCADE")
     )
     observed_value: Mapped[Decimal | None] = mapped_column(Numeric(28, 8))
+    # remediation workflow (feature 8): accountable corrective action
+    category: Mapped[str | None] = mapped_column(String(50))
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    action_required: Mapped[str | None] = mapped_column(Text)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    escalation_level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    comments: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[ValidationExceptionStatus] = mapped_column(
         Enum(ValidationExceptionStatus, name="validation_exception_status", native_enum=True),
         nullable=False,

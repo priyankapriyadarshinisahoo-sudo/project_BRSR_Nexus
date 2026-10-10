@@ -138,8 +138,94 @@ def scan_reminders(db: Session) -> dict:
             "message": f"{a.metric_code} is {label}",
         })
         created += 1
+    escalation = escalate_overdue(db, today)
     db.commit()
-    return {"created": created, "scanned": len(open_assignments)}
+    return {"created": created, "scanned": len(open_assignments), "escalations": escalation}
+
+
+def escalate_overdue(db: Session, today) -> dict:
+    """SLA + escalation engine (feature 9): risk-sensitive escalation for
+    overdue work items. Level 1 fires on the first overdue day, level 2 when
+    overdue by more than 7 days on a CRITICAL/BRSR Core metric. Deduped by
+    the escalation_event table (one row per assignment+level — no spam) and
+    recorded in the audit trail."""
+    from datetime import timedelta
+
+    from sqlalchemy import select as _select
+
+    from app.audit.service import record
+    from app.governance.policies import get_policy
+    from app.models import AppUser, EscalationEvent
+    from app.models.enums import AuditAction, MetricRiskTier, UserRole
+
+    fired = 0
+    open_assignments = list(
+        db.scalars(
+            select(Assignment).where(
+                Assignment.due_date.is_not(None),
+                Assignment.due_date < today,
+                Assignment.status.notin_(
+                    [AssignmentStatus.APPROVED, AssignmentStatus.LOCKED]
+                ),
+            )
+        ).all()
+    )
+    managers = list(
+        db.scalars(
+            select(AppUser).where(
+                AppUser.role == UserRole.ESG_MANAGER, AppUser.is_active.is_(True)
+            )
+        ).all()
+    )
+    for a in open_assignments:
+        policy = get_policy(db, a.framework_version_id, a.metric_code)
+        tier = policy.risk_tier.value
+        days_overdue = (today - a.due_date).days
+        # level 1: overdue — owner already reminded; escalate beyond owner per policy
+        if tier == MetricRiskTier.STANDARD and days_overdue <= 7:
+            continue  # standard: owner reminder only
+        level = 2 if (tier == MetricRiskTier.CRITICAL and days_overdue > 7) else 1
+        exists = db.scalar(
+            _select(EscalationEvent.id).where(
+                EscalationEvent.assignment_id == a.id,
+                EscalationEvent.level >= level,
+            )
+        )
+        if exists:
+            continue
+        recipients: list[AppUser] = []
+        if tier != MetricRiskTier.STANDARD:
+            recipients.extend(managers)
+        if tier == MetricRiskTier.CRITICAL and a.reviewer_user_id:
+            reviewer = db.get(AppUser, a.reviewer_user_id)
+            if reviewer is not None:
+                recipients.append(reviewer)
+        recipient_ids = [r.id for r in recipients if r.id != a.owner_user_id]
+        db.add(EscalationEvent(
+            assignment_id=a.id, level=level, risk_tier=tier,
+            recipients=[str(r) for r in recipient_ids],
+        ))
+        for recipient_id in recipient_ids:
+            notify(db, recipient_id, NotificationType.ESCALATION, {
+                "assignment_id": str(a.id),
+                "metric_code": a.metric_code,
+                "due_date": str(a.due_date),
+                "level": level,
+                "risk_tier": tier,
+                "message": f"ESCALATION L{level}: {a.metric_code} is {days_overdue} day(s) overdue "
+                           f"(risk tier {tier})",
+            })
+        record(
+            db, action=AuditAction.ESCALATED, object_type="assignment",
+            object_id=a.id, actor_label="sla-engine",
+            entity_id=a.entity_id, metric_code=a.metric_code,
+            new_value={"level": level, "risk_tier": tier,
+                       "days_overdue": days_overdue,
+                       "recipients": len(recipient_ids)},
+            reason="SLA escalation",
+        )
+        fired += 1
+    return {"fired": fired, "scanned": len(open_assignments)}
 
 
 # review-action notifications are emitted from the collection service
