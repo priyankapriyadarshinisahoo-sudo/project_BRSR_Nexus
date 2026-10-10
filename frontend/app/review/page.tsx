@@ -3,9 +3,17 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Assignment, listAssignments, reviewAssignment, STATUS_COLORS } from "@/features/collection/collection";
+import { RISK_COLORS } from "@/features/governance/governance";
+import { api } from "@/lib/api";
+
+interface PolicyLite {
+  metric_code: string;
+  risk_tier: "STANDARD" | "HIGH" | "CRITICAL";
+}
 
 export default function ReviewQueuePage() {
   const [rows, setRows] = useState<Assignment[] | null>(null);
+  const [riskByMetric, setRiskByMetric] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [commentFor, setCommentFor] = useState<string | null>(null);
   const [comment, setComment] = useState("");
@@ -15,8 +23,15 @@ export default function ReviewQueuePage() {
     return Promise.all([
       listAssignments({ status: "SUBMITTED" }),
       listAssignments({ status: "UNDER_REVIEW" }),
+      listAssignments({ status: "PENDING_SECOND_APPROVAL" }),
+      api<PolicyLite[]>("/api/v1/control-policies").catch(() => []),
     ])
-      .then(([submitted, underReview]) => setRows([...submitted, ...underReview]))
+      .then(([submitted, underReview, secondApproval, policies]) => {
+        setRows([...submitted, ...underReview, ...secondApproval]);
+        setRiskByMetric(
+          Object.fromEntries(policies.map((p) => [p.metric_code, p.risk_tier])),
+        );
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load review queue"));
   }, []);
 
@@ -56,20 +71,30 @@ export default function ReviewQueuePage() {
       ) : (
         <table className="data-table">
           <thead>
-            <tr><th>Metric</th><th>Status</th><th>Actions</th></tr>
+            <tr><th>Metric</th><th>Risk</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {rows.map((a) => (
+            {rows.map((a) => {
+              const risk = riskByMetric[a.metric_code] ?? "STANDARD";
+              const riskColor = RISK_COLORS[risk] ?? "#94a3b8";
+              return (
               <tr key={a.id}>
                 <td className="mono">
-                  {a.metric_code} <a className="linkbtn" href={`/assignments/${a.id}`}>view</a>
+                  {a.metric_code}{" "}
+                  <a className="linkbtn" href={`/assignments/${a.id}`}>view</a>{" "}
+                  <a className="linkbtn" href={`/passport/${a.id}`}>passport</a>
+                </td>
+                <td>
+                  <span className="status-badge" style={{ borderColor: riskColor, color: riskColor }}>
+                    {risk}
+                  </span>
                 </td>
                 <td>
                   <span
                     className="status-badge"
                     style={{ borderColor: STATUS_COLORS[a.status], color: STATUS_COLORS[a.status] }}
                   >
-                    {a.status.replace("_", " ")}
+                    {a.status.replace(/_/g, " ")}
                   </span>
                 </td>
                 <td>
@@ -91,6 +116,11 @@ export default function ReviewQueuePage() {
                         Needs correction / Reject
                       </button>
                     </>
+                  )}
+                  {a.status === "PENDING_SECOND_APPROVAL" && (
+                    <button className="primarybtn" disabled={busy} onClick={() => act(a.id, "SECOND_APPROVAL")}>
+                      Grant second approval
+                    </button>
                   )}
                   {commentFor === a.id && (
                     <div className="comment-box">
@@ -118,7 +148,8 @@ export default function ReviewQueuePage() {
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       )}

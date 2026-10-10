@@ -11,9 +11,16 @@ export interface ValidationException {
   period_id: string | null;
   assignment_id: string | null;
   observed_value: number | null;
-  status: "OPEN" | "EXPLAINED" | "RESOLVED";
+  status: "OPEN" | "INVESTIGATING" | "EXPLAINED" | "RESOLVED";
   explanation: string | null;
   created_at: string;
+  // remediation workflow (governance upgrade)
+  category?: string | null;
+  assigned_to?: string | null;
+  action_required?: string | null;
+  due_date?: string | null;
+  escalation_level?: number;
+  comments?: { actor: string; action: string; comment: string | null; at: string }[];
 }
 
 export const listExceptions = (params: Record<string, string> = {}) => {
@@ -44,6 +51,16 @@ export const SEVERITY_COLORS: Record<string, string> = {
 
 export const EXCEPTION_STATUS_COLORS: Record<string, string> = {
   OPEN: "#ef4444",
+  INVESTIGATING: "#38bdf8",
   EXPLAINED: "#f59e0b",
   RESOLVED: "#10b981",
 };
+
+export const remediationAction = (
+  id: string,
+  body: { action: string; comment?: string; assignee_id?: string; due_date?: string; action_required?: string },
+) =>
+  api<ValidationException>(`/api/v1/validation/exceptions/${id}/actions`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });

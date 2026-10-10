@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
 import { api } from "@/lib/api";
+import { getControlTower, type ControlTowerSummary } from "@/features/governance/governance";
 
 /* ---------------- animated counter ---------------- */
 function useCountUp(target: number | null, duration = 900): string {
@@ -92,12 +93,16 @@ function KpiCard({ k, index }: { k: Summary["kpis"][number]; index: number }) {
 export default function Home() {
   const { user, loading } = useAuth();
   const [data, setData] = useState<Summary | null>(null);
+  const [tower, setTower] = useState<ControlTowerSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api<Summary>("/api/v1/dashboard/summary")
       .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load dashboard"));
+    getControlTower()
+      .then(setTower)
+      .catch(() => setTower(null));
   }, []);
 
   const pipeline = useMemo(() => {
@@ -139,6 +144,54 @@ export default function Home() {
         data only, never estimated.
       </p>
       {error && <div className="state error" style={{ marginTop: "1rem" }}>{error}</div>}
+
+      {tower && (
+        <div className="dash-grid tower-strip rise rise-d1" style={{ marginTop: "1.2rem" }}>
+          <div className="dash-card glass-card col-4">
+            <h3>Critical metrics readiness</h3>
+            <p className="sub">CRITICAL risk tier · {tower.period_label}</p>
+            <div className="readiness-stats">
+              <div>Total <b>{tower.critical_metrics.total}</b></div>
+              <div>Ready <b>{tower.critical_metrics.ready}</b></div>
+              <div>Blocked <b>{tower.critical_metrics.blocked}</b></div>
+              <div>Pending review <b>{tower.critical_metrics.pending_review}</b></div>
+            </div>
+          </div>
+          <div className="dash-card glass-card col-4">
+            <h3>Open high-risk issues</h3>
+            <p className="sub">Governance blockers from live system data</p>
+            <div className="readiness-stats">
+              <div>Blocking exceptions <b>{tower.high_risk.open_blocking_exceptions}</b></div>
+              <div>Missing evidence <b>{tower.high_risk.missing_evidence}</b></div>
+              <div>Stale metrics <b>{tower.high_risk.stale_metrics}</b></div>
+              <div>Overdue owners <b>{tower.high_risk.overdue_owners}</b></div>
+              <div>Reviewer backlog <b>{tower.high_risk.reviewer_backlog}</b></div>
+              <div>Assurance requests <b>{tower.high_risk.open_assurance_requests}</b></div>
+            </div>
+          </div>
+          <div className="dash-card glass-card col-4">
+            <h3>Current bottleneck</h3>
+            <p className="sub">Where the reporting cycle is blocked</p>
+            {tower.bottleneck.stage ? (
+              <>
+                <div className="kpi-value" style={{ fontSize: "1.6rem" }}>
+                  {tower.bottleneck.stage}
+                </div>
+                <p className="sub">
+                  {tower.bottleneck.count} work item(s) · {tower.bottleneck.detail}
+                </p>
+              </>
+            ) : (
+              <p className="sub">No bottleneck detected.</p>
+            )}
+            <div className="readiness-stats">
+              <div>Next deadline <b>{tower.deadlines.next_critical_deadline ?? "—"}</b></div>
+              <div>Overdue <b>{tower.deadlines.overdue_count}</b></div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!data && !error && (
         <div className="dash-grid" style={{ marginTop: "1.2rem" }}>
           {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton glass-card" style={{ height: "8rem" }} />)}

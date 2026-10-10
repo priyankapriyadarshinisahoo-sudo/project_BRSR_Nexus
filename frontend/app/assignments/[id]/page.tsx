@@ -7,6 +7,7 @@ import { useAuth } from "@/components/AuthProvider";
 import { api } from "@/lib/api";
 import { DynamicMetricForm } from "@/components/DynamicMetricForm";
 import { GovernanceStepper } from "@/components/GovernanceStepper";
+import { StyledSelect } from "@/components/StyledSelect";
 import {
   AssignmentDetail,
   getAssignment,
@@ -19,8 +20,13 @@ import {
   downloadEvidence,
   EvidenceRow,
   listEvidence,
-  uploadEvidence,
 } from "@/features/evidence/evidence";
+import { uploadEvidenceWithCategory } from "@/features/governance/governance";
+import {
+  getControlPassport,
+  RISK_COLORS,
+  type ControlPassport,
+} from "@/features/governance/governance";
 
 interface AISuggestion {
   id: string;
@@ -38,10 +44,12 @@ export default function AssignmentDetailPage() {
   const params = useParams<{ id: string }>();
   const { user } = useAuth();
   const [detail, setDetail] = useState<AssignmentDetail | null>(null);
+  const [passport, setPassport] = useState<ControlPassport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceRow[]>([]);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [evidenceCategory, setEvidenceCategory] = useState<string>("");
   const [suggestions, setSuggestions] = useState<AISuggestion[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
 
@@ -117,7 +125,7 @@ export default function AssignmentDetailPage() {
     setUploading(true);
     setEvidenceError(null);
     try {
-      await uploadEvidence(detail.values[0].id, file);
+      await uploadEvidenceWithCategory(detail.values[0].id, file, evidenceCategory || undefined);
       await reloadEvidence();
     } catch (err) {
       setEvidenceError(err instanceof Error ? err.message : "Upload failed");
@@ -146,6 +154,9 @@ export default function AssignmentDetailPage() {
   }
 
   const reload = useCallback(() => {
+    getControlPassport(params.id)
+      .then(setPassport)
+      .catch(() => setPassport(null));
     return getAssignment(params.id)
       .then(setDetail)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load assignment"));
@@ -186,13 +197,51 @@ export default function AssignmentDetailPage() {
           className="status-badge"
           style={{ borderColor: STATUS_COLORS[assignment.status], color: STATUS_COLORS[assignment.status] }}
         >
-          {assignment.status.replace("_", " ")}
+          {assignment.status.replace(/_/g, " ")}
         </span>
+        {passport && (
+          <>
+            <span
+              className="status-badge"
+              style={{ borderColor: RISK_COLORS[passport.risk.tier], color: RISK_COLORS[passport.risk.tier] }}
+            >
+              RISK: {passport.risk.tier}
+            </span>
+            {passport.risk.brsr_core && <span className="badge core">BRSR Core</span>}
+          </>
+        )}
+        <a className="linkbtn" href={`/passport/${assignment.id}`}>Control Passport →</a>
       </div>
       <p className="hint rise rise-d1">
         {detail.entity_name} · {detail.period_label} · <span className="mono">{metric.metric_code}</span>
       </p>
       <GovernanceStepper status={assignment.status} />
+
+      {passport && passport.blocking.length > 0 && (
+        <div className="glass-card blocking-card rise">
+          <strong>BLOCKED</strong>
+          {passport.blocking.map((b) => (
+            <div key={b.code} className="blocking-row">
+              <span className="badge error">{b.code}</span>
+              <div>
+                <div>{b.detail}</div>
+                <div className="hint">Next action: {b.next_action}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {passport && passport.impact.events > 0 && (
+        <div className="glass-card impact-banner rise">
+          <strong>⚠ DATA CHANGE IMPACT</strong>
+          <p>
+            This source change affects {passport.impact.derived} calculation(s),{" "}
+            {passport.impact.consolidations} consolidation(s) and {passport.impact.brsr} BRSR Core
+            disclosure(s). Re-verification required.
+          </p>
+        </div>
+      )}
 
       <DynamicMetricForm
         metric={metric}
@@ -217,10 +266,25 @@ export default function AssignmentDetailPage() {
         <h2>Evidence</h2>
         {evidenceError && <div className="auth-error">{evidenceError}</div>}
         {detail.values.length > 0 && user?.role === "DATA_OWNER" && editable && (
-          <label className="uploadbtn">
-            {uploading ? "Uploading…" : "Upload evidence (PDF / CSV / XLSX / PNG / JPG)"}
-            <input type="file" accept=".pdf,.csv,.xlsx,.png,.jpg,.jpeg" onChange={onUploadFile} />
-          </label>
+          <div className="evidence-upload-row">
+            <StyledSelect
+              value={evidenceCategory}
+              options={[
+                { value: "", label: "Evidence category (optional)…" },
+                { value: "source_data", label: "Source data" },
+                { value: "methodology", label: "Calculation methodology" },
+                { value: "emission_factor", label: "Emission factor" },
+                { value: "supporting_doc", label: "Supporting document" },
+                { value: "reviewer_confirmation", label: "Reviewer confirmation" },
+              ]}
+              onChange={setEvidenceCategory}
+              ariaLabel="Evidence category"
+            />
+            <label className="uploadbtn">
+              {uploading ? "Uploading…" : "Upload evidence (PDF / CSV / XLSX / PNG / JPG)"}
+              <input type="file" accept=".pdf,.csv,.xlsx,.png,.jpg,.jpeg" onChange={onUploadFile} />
+            </label>
+          </div>
         )}
         {detail.values.length === 0 ? (
           <p className="state">Save a value first, then attach evidence.</p>

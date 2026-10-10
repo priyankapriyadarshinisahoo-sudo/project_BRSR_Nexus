@@ -956,3 +956,50 @@ input[type="password"]:focus {
   width: 3px;
   background: var(--sky);
 }
+
+/* ---------------- governance upgrade: passport, impact, remediation ---------------- */
+.tower-strip { align-items: stretch; }
+
+.passport-headbadges { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+.passport-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+@media (max-width: 900px) { .passport-grid { grid-template-columns: 1fr; } }
+.passport-facts { padding: 1.1rem 1.3rem; }
+.passport-facts h3 { margin: 0 0 0.6rem; }
+.passport-value { font-size: 2rem; margin-bottom: 0.4rem; }
+
+.fact { display: flex; justify-content: space-between; gap: 1rem; padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(94, 118, 153, 0.12); font-size: 0.85rem; }
+.fact:last-child { border-bottom: none; }
+.fact span { color: var(--muted); }
+.fact b { text-align: right; }
+
+.chiprow { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+.tabbtn { padding: 0.45rem 0.9rem; font-size: 0.8rem; }
+.passport-tab { margin-top: 0.8rem; padding: 1.1rem 1.3rem; }
+.passport-tab h3 { margin: 0.8rem 0 0.4rem; }
+.passport-tab h3:first-child { margin-top: 0; }
+
+.blocking-card { border: 1px solid rgba(248, 113, 113, 0.5); margin-top: 1rem; padding: 1rem 1.2rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.blocking-card > strong { color: var(--red); letter-spacing: 0.08em; }
+.blocking-row { display: flex; gap: 0.7rem; align-items: flex-start; font-size: 0.88rem; }
+
+.impact-banner { border: 1px solid rgba(251, 191, 36, 0.55); margin-top: 1rem; padding: 1rem 1.2rem; }
+.impact-banner > strong { color: var(--amber); letter-spacing: 0.06em; }
+.impact-banner p { margin: 0.4rem 0 0; font-size: 0.88rem; }
+
+.dep-flow { display: flex; flex-direction: column; gap: 0.4rem; }
+.dep-level { display: flex; gap: 0.6rem; align-items: flex-start; }
+.dep-arrow { color: var(--muted); }
+.dep-code { font-size: 0.8rem; padding: 0.1rem 0; }
+.dep-level .hint { font-size: 0.7rem; }
+
+.evidence-upload-row { display: flex; gap: 0.7rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.actionrow { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.actionrow .comment-box { width: 100%; }
+
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.7rem; margin: 0.6rem 0; }
+.text-input { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  border-radius: 10px; padding: 0.55rem 0.8rem; font-size: 0.85rem; }
+.text-input:focus { outline: none; border-color: var(--accent); }
